@@ -45,7 +45,7 @@ int main(void)
 
 	while (1)
 	{
-		printf("waiting for data\n");
+		printf("Waiting to receive window size\n");
 		sin_size = sizeof (struct sockaddr_in);
 		con_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);            //accept the packet
 		if (con_fd <0)
@@ -72,34 +72,79 @@ void str_ser(int sockfd)
 	char buf[BUFSIZE];
 	FILE *fp;
 	char recvs[DATALEN];
+	char recvw[DATALEN];
 	struct ack_so ack;
 	int end, n = 0;
+	int windowsize = 0;
+	int datasize = 0;
+	int packetreceived = 0 ;
 	long lseek=0;
+	int mode = 0;
 	end = 0;
-	
+
 	printf("receiving data!\n");
 
 	while(!end)
 	{
-		if ((n= recv(sockfd, &recvs, DATALEN, 0))==-1)                                   //receive the packet
-		{
-			printf("error when receiving\n");
-			exit(1);
+		if(mode ==0){
+			if((n= recv(sockfd, &recvw, DATALEN, 0))==-1)
+			{
+				printf("receiving error!\n");
+				return;
+			}
+			char *e;
+			char d[BUFSIZE];
+			int index;
+			e = strchr(recvw, '-');
+			index = (int)(e - recvw);
+			strncpy(d,recvw + index+1 ,strlen(recvw)-index-1);
+			datasize = atoi(d);
+			printf("%s\n", d);
+			recvw[n] = '\0';
+			windowsize = atoi(recvw);
+			if(windowsize<=0){
+				printf("windowsize is less than or equal to zero");
+				return;
+			}
+			ack.num = 1;
+			ack.len = 0;
+			if ((n = send(sockfd, &ack, 2, 0))==-1)//send the ack
+			{
+				printf("send error!");								
+				exit(1);
+			}
+			memset(recvw, 0, sizeof(recvw));
+			mode = 1;
+			printf("the received number of windows is:%d\n", windowsize);
+
 		}
-		if (recvs[n-1] == '\0')									//if it is the end of the file
+		if(mode == 1)
 		{
-			end = 1;
-			n --;
+			while(packetreceived<windowsize && !end){
+				if ((n= recv(sockfd, &recvs, DATALEN, 0))==-1)                                   //receive the packet
+				{
+					printf("error when receiving\n");
+					exit(1);
+				}
+				memcpy((buf+lseek), recvs, n);
+				packetreceived += 1;
+				lseek += n;			
+				if(lseek>=datasize)
+				{
+					end = 1;
+					mode = 0;
+				}
+			}			
+			printf("packet received: %d\n", packetreceived);
+			packetreceived = 0;
+			ack.num = 1;
+			ack.len = 0;
+			if ((n = send(sockfd, &ack, 2, 0))==-1)//send the ack
+			{
+				printf("send error!");								
+				exit(1);
+			}
 		}
-		memcpy((buf+lseek), recvs, n);
-		lseek += n;
-	}
-	ack.num = 1;
-	ack.len = 0;
-	if ((n = send(sockfd, &ack, 2, 0))==-1)
-	{
-			printf("send error!");								//send the ack
-			exit(1);
 	}
 	if ((fp = fopen ("myTCPreceive.txt","wt")) == NULL)
 	{
@@ -109,4 +154,5 @@ void str_ser(int sockfd)
 	fwrite (buf , 1 , lseek , fp);					//write data into file
 	fclose(fp);
 	printf("a file has been successfully received!\nthe total data received is %d bytes\n", (int)lseek);
+	
 }

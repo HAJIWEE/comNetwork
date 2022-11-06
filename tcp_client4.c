@@ -4,7 +4,7 @@ tcp_client.c: the source file of the client in tcp transmission
 
 #include "headsock.h"
 
-float str_cli(FILE *fp, int sockfd, long *len);                       //transmission function
+float str_cli(FILE *fp, int sockfd, long *len, int windowsize);                       //transmission function
 void tv_sub(struct  timeval *out, struct timeval *in);	    //calcu the time interval between out and in
 
 int main(int argc, char **argv)
@@ -16,9 +16,10 @@ int main(int argc, char **argv)
 	char ** pptr;
 	struct hostent *sh;
 	struct in_addr **addrs;
+	int windowsize = atoi(argv[2]);
 	FILE *fp;
 
-	if (argc != 2) {
+	if (argc != 3) {
 		printf("parameters not match");
 	}
 
@@ -61,11 +62,11 @@ int main(int argc, char **argv)
 	
 	if((fp = fopen ("myfile.txt","r+t")) == NULL)
 	{
-		printf("File doesn't exit\n");
+		printf("File doesn't exist\n");
 		exit(0);
 	}
 
-	ti = str_cli(fp, sockfd, &len);                       //perform the transmission and receiving
+	ti = str_cli(fp, sockfd, &len, windowsize);                       //perform the transmission and receiving
 	rt = (len/(float)ti);                                         //caculate the average transmission rate
 	printf("Time(ms) : %.3f, Data sent(byte): %d\nData rate: %f (Kbytes/s)\n", ti, (int)len, rt);
 
@@ -75,22 +76,29 @@ int main(int argc, char **argv)
 	exit(0);
 }
 
-float str_cli(FILE *fp, int sockfd, long *len)
+float str_cli(FILE *fp, int sockfd, long *len, int windowsize)
 {
 	char *buf;
 	long lsize, ci;
 	char sends[DATALEN];
 	struct ack_so ack;
-	int n, slen;
+	int n, slen, mode, packetsent;
+	int cycles = 0 ;
+	int end = 0;
 	float time_inv = 0.0;
 	struct timeval sendt, recvt;
 	ci = 0;
+	packetsent = 0;
+	mode = 0;
+
+	printf("the windowsize is %d \n", windowsize);
 
 	fseek (fp , 0 , SEEK_END);
 	lsize = ftell (fp);
 	rewind (fp);
 	printf("The file length is %d bytes\n", (int)lsize);
 	printf("the packet length is %d bytes\n",DATALEN);
+
 
 // allocate memory to contain the whole file.
 	buf = (char *) malloc (lsize);
@@ -102,27 +110,63 @@ float str_cli(FILE *fp, int sockfd, long *len)
   /*** the whole file is loaded in the buffer. ***/
 	buf[lsize] ='\0';									//append the end byte
 	gettimeofday(&sendt, NULL);							//get the current time
-	while(ci<= lsize)
+	while(ci<=lsize)
 	{
-		if ((lsize+1-ci) <= DATALEN)
-			slen = lsize+1-ci;
-		else 
-			slen = DATALEN;
-		memcpy(sends, (buf+ci), slen);
-		n = send(sockfd, &sends, slen, 0);
-		if(n == -1) {
-			printf("send error!");								//send the data
-			exit(1);
+		if(mode == 0){
+			char windSize[BUFSIZE];
+			char DataSize[BUFSIZE];
+			char COMMA[] = "-";
+			snprintf(DataSize, sizeof(DataSize), "%d", (int)lsize);
+			snprintf(windSize, sizeof(windSize), "%d", windowsize);
+			strcat(windSize, COMMA);
+			strcat(windSize,DataSize);
+			printf("%s\n",windSize);
+			n = send(sockfd, windSize, strlen(windSize), 0); //send the data
+			if(n == -1) {
+				printf("send windowsize error!");								
+				exit(1);
+			}
+			if ((n= recv(sockfd, &ack, 2, 0))==-1)                                   //receive the ack
+			{
+				printf("error when receiving\n");
+			}
+			if (ack.num != 1|| ack.len != 0)
+				printf("error in transmission\n");
+			else
+				printf("acknowledged windowSize\n");
+			mode = 1;
 		}
-		ci += slen;
-	}
-	if ((n= recv(sockfd, &ack, 2, 0))==-1)                                   //receive the ack
-	{
-		printf("error when receiving\n");
-		exit(1);
-	}
-	if (ack.num != 1|| ack.len != 0)
-		printf("error in transmission\n");
+		if(mode == 1){
+			while(packetsent<windowsize && !end)
+			{
+				if ((lsize+1-ci) <= DATALEN)
+					slen = lsize+1-ci;
+				else 
+					slen = DATALEN;
+				memcpy(sends, (buf+ci), slen);
+				n = send(sockfd, &sends, slen, 0); //send the data
+				if(n == -1) {
+					printf("send error!");								
+					exit(1);
+				}				
+				ci += slen;
+				packetsent += 1;
+				if(slen!=DATALEN){
+					end = 1;
+					}		
+			}
+			printf("packet sent: %d\n", packetsent);
+			
+			if ((n= recv(sockfd, &ack, 2, 0))==-1)                                   //receive the ack
+			{
+				printf("error when receiving\n");
+			}
+			if (ack.num != 1|| ack.len != 0)
+				printf("error in transmission\n");
+			cycles += 1;
+			packetsent = 0;
+	}}
+	printf("Cycle: %ld\n", ci);
 	gettimeofday(&recvt, NULL);
 	*len= ci;                                                         //get current time
 	tv_sub(&recvt, &sendt);                                                                 // get the whole trans time
